@@ -1,0 +1,549 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# DSS VoIP Notifier for Home Assistant
+# Make VoIP calls from Home Assistant
+#
+# Every message received on stdin is handled in its own background job with
+# its own pjsua instance, so several calls can run at the same time.
+# ==============================================================================
+
+readonly DATA_DIR=/share/dss_voip
+readonly CALLS_DIR="${DATA_DIR}/calls"
+readonly LOG_FILE="${DATA_DIR}/dss_pjsua.log"
+readonly SOX_LOG_FILE="${DATA_DIR}/dss_sox.log"
+readonly BASE_CONF="${DATA_DIR}/dss_pjsua.conf"
+readonly AUTOANSWER_CONF="${DATA_DIR}/dss_autoanswer.conf"
+readonly AUTOANSWER_LOG="${DATA_DIR}/dss_autoanswer.log"
+readonly CORE_URL=http://supervisor/core
+
+# Seconds pjsua gets to reach the "ringing" state before the ring timer
+# falls back to counting from the moment of dialing.
+readonly SETUP_GRACE=10
+
+LOG_PREFIX=""
+CALL_ID=0
+
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+
+log_to_file() {
+   echo "$(date '+%F %T') ${LOG_PREFIX}$*"                >> "${LOG_FILE}"
+}
+
+log_info() {
+   bashio::log.info "${LOG_PREFIX}$*"
+   log_to_file "$*"
+}
+
+log_warn() {
+   bashio::log.warning "${LOG_PREFIX}$*"
+   log_to_file "[Warning] $*"
+}
+
+log_error() {
+   bashio::log.error "${LOG_PREFIX}$*"
+   log_to_file "[Error] $*"
+}
+
+is_uint() {
+   [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+is_bool() {
+   [[ "$1" == "true" || "$1" == "false" ]]
+}
+
+# Write a pjsua option to a config file, quoted so values may contain spaces
+conf_opt() {
+   if [[ "$2" == *\"* ]]; then
+      printf -- "--%s '%s'\n" "$1" "$2"
+   else
+      printf -- '--%s "%s"\n' "$1" "$2"
+   fi
+}
+
+# pjsua reads at most 200 characters per config line, so custom options are
+# written one option per line. En dashes ("–no-tcp" copied from web pages)
+# are turned into normal dashes.
+custom_opts() {
+   local opts="${PJSUA_CUSTOM_OPTIONS//–/-}"
+   [ -n "${opts}" ] && sed -e 's/[[:space:]]\+--/\n--/g' <<<"${opts}"
+}
+
+# Account options shared by the auto-answer client and outgoing calls
+sip_account_opts() {
+   echo "--null-audio"
+   echo "--local-port 0"
+   conf_opt id "${CALLER_ID_URI}"
+   conf_opt realm "${REALM}"
+   [ -n "${SIP_USERNAME}" ] && conf_opt username "${SIP_USERNAME}"
+   [ -n "${SIP_PASSWORD}" ] && conf_opt password "${SIP_PASSWORD}"
+   custom_opts
+}
+
+# Read an optional add-on option ("null" from bashio becomes the default)
+config_value() {
+   local value
+   value=$(bashio::config "$1")
+   [ "${value}" == "null" ] && value="$2"
+   echo "${value}"
+}
+
+# Read an optional value from the JSON message (empty if missing)
+msg_value() {
+   jq --raw-output --arg key "$2" '.[$key] | if . == null then empty else tostring end' <<<"$1"
+}
+
+# ------------------------------------------------------------------------------
+# Audio
+# ------------------------------------------------------------------------------
+
+# Download an audio file. Prints the local path of the downloaded file.
+#   $1 url   $2 target path without extension   $3 "auth" = send supervisor token
+download_audio() {
+   local url="$1" target="$2" auth="$3" ctype ext
+   local -a args=(--silent --show-error --fail --location --max-time 120)
+
+   [ "${auth}" == "auth" ] && args+=(-H "Authorization: Bearer ${SUPERVISOR_TOKEN}")
+
+   if ! ctype=$(curl "${args[@]}" -o "${target}.download" -w '%{content_type}' "${url}" 2>&1); then
+      log_error "Cannot download audio file '${url}': ${ctype}"
+      return 1
+   fi
+
+   ext=$(sed -E 's/[?#].*$//; s/.*\.([A-Za-z0-9]+)$/\1/; t; s/.*//' <<<"${url}" | tr '[:upper:]' '[:lower:]')
+   case "${ext}" in
+      mp3|wav|ogg|oga|flac|aiff|aif|au|gsm) ;;
+      *)
+         case "${ctype}" in
+            *mpeg*|*mp3*) ext=mp3 ;;
+            *wav*)        ext=wav ;;
+            *ogg*)        ext=ogg ;;
+            *flac*)       ext=flac ;;
+            *)            ext=mp3 ;;
+         esac
+         ;;
+   esac
+
+   mv "${target}.download" "${target}.${ext}"
+   echo "${target}.${ext}"
+}
+
+# First TTS entity of Home Assistant, used when platform_tts is not set
+default_tts_engine() {
+   curl --silent --fail --max-time 15 \
+      -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
+      "${CORE_URL}/api/states" \
+      | jq --raw-output '[.[].entity_id | select(startswith("tts."))] | first // empty'
+}
+
+# Let Home Assistant render the message and download the result.
+#   $1 message   $2 engine   $3 language   $4 target path without extension
+fetch_tts() {
+   local message="$1" engine="$2" language="$3" target="$4"
+   local data response code body path
+
+   if [ -z "${engine}" ]; then
+      engine=$(default_tts_engine)
+      if [ -z "${engine}" ]; then
+         log_error "No TTS engine found in Home Assistant. Set up a TTS integration or set 'platform_tts'."
+         return 1
+      fi
+   fi
+
+   data=$(jq --null-input --arg message "${message}" --arg engine "${engine}" --arg language "${language}" \
+      '{message: $message, engine_id: $engine, cache: true}
+       + (if $language != "" then {language: $language} else {} end)')
+   log_to_file "TTS request: ${data}"
+
+   response=$(curl --silent --show-error --max-time 60 -w '\n%{http_code}' -X POST \
+      -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
+      -H "Content-Type: application/json" \
+      -d "${data}" "${CORE_URL}/api/tts_get_url" 2>&1)
+   code=${response##*$'\n'}
+   body=${response%$'\n'*}
+   log_to_file "TTS response (${code}): ${body}"
+
+   path=$(jq --raw-output '.path // empty' <<<"${body}" 2> /dev/null)
+   if [ "${code}" != "200" ] || [ -z "${path}" ]; then
+      log_error "TTS with engine '${engine}' failed (HTTP ${code}): ${body}"
+      return 1
+   fi
+
+   download_audio "${CORE_URL}${path}" "${target}" auth
+}
+
+# ------------------------------------------------------------------------------
+# Calls
+# ------------------------------------------------------------------------------
+
+# Places a single call attempt with pjsua and supervises it.
+#   $1 call directory   $2 SIP URI
+#   $3 ring timeout     (seconds of ringing before hanging up, 0 = off)
+#   $4 talk time        (seconds after answer before hanging up, 0 = off)
+#   $5 give up at       (epoch, hang up if still not answered, 0 = off)
+#   $6 hard stop at     (epoch, hang up in any state, 0 = off)
+#   $7 redial on busy   (true/false)
+# Returns 0 = answered, 1 = not answered (redial possible), 2 = do not redial
+dial_once() {
+   local dir="$1" uri="$2" ring_timeout="$3" talk_time="$4" give_up_at="$5" hard_stop_at="$6" redial_on_busy="$7"
+   local fifo="${dir}/pjsua.ctl" out="${dir}/pjsua_attempt.log"
+   local start now ring_start=0 answer_start=0 ring_ref ring_limit
+   local result=1 reason="" code="" pid
+
+   rm -f "${fifo}" && mkfifo "${fifo}"
+   : > "${out}"
+
+   # pjsua reads its console commands (h = hangup, q = quit) from the fifo.
+   # Opening it read-write never blocks and never delivers EOF.
+   exec 3<> "${fifo}"
+   pjsua --app-log-level=3 --config-file "${dir}/pjsua.conf" "${uri}" <&3 > "${out}" 2>&1 &
+   pid=$!
+
+   start=$(date +%s)
+   while kill -0 "${pid}" 2> /dev/null; do
+      now=$(date +%s)
+
+      if [ "${answer_start}" -eq 0 ] && grep -q "state changed to CONFIRMED" "${out}"; then
+         answer_start=${now}
+         result=0
+         log_info "Call answered."
+      fi
+
+      if grep -q "is DISCONNECTED" "${out}"; then
+         reason=$(grep -o "DISCONNECTED \[reason=[^]]*\]" "${out}" | tail -n 1)
+         code=$(grep -oE "DISCONNECTED \[reason=[0-9]+" "${out}" | tail -n 1 | grep -oE "[0-9]+$")
+         break
+      fi
+
+      if [ "${answer_start}" -eq 0 ] && [ "${ring_start}" -eq 0 ] \
+         && grep -q "state changed to EARLY" "${out}"; then
+         ring_start=${now}
+         log_info "Ringing..."
+      fi
+
+      if [ "${hard_stop_at}" -gt 0 ] && [ "${now}" -ge "${hard_stop_at}" ]; then
+         reason="call duration reached"
+         break
+      fi
+
+      if [ "${answer_start}" -gt 0 ]; then
+         if [ "${talk_time}" -gt 0 ] && [ $((now - answer_start)) -ge "${talk_time}" ]; then
+            reason="message played"
+            break
+         fi
+      else
+         if [ "${give_up_at}" -gt 0 ] && [ "${now}" -ge "${give_up_at}" ]; then
+            reason="retry timeout reached"
+            break
+         fi
+         if [ "${ring_timeout}" -gt 0 ]; then
+            if [ "${ring_start}" -gt 0 ]; then
+               ring_ref=${ring_start}
+               ring_limit=${ring_timeout}
+            else
+               ring_ref=${start}
+               ring_limit=$((ring_timeout + SETUP_GRACE))
+            fi
+            if [ $((now - ring_ref)) -ge "${ring_limit}" ]; then
+               reason="no answer"
+               break
+            fi
+         fi
+      fi
+
+      sleep 0.5
+   done
+
+   # Hang up (if still connected) and quit pjsua
+   if kill -0 "${pid}" 2> /dev/null; then
+      echo "h" >&3
+      sleep 1
+      echo "q" >&3
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+         kill -0 "${pid}" 2> /dev/null || break
+         sleep 0.5
+      done
+      kill -9 "${pid}" 2> /dev/null
+   fi
+   wait "${pid}" 2> /dev/null
+   exec 3>&-
+   rm -f "${fifo}"
+
+   # Keep only pjsua's log lines (not its console menu) in the log file
+   grep -E '^[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}' "${out}" \
+      | sed "s/^/${LOG_PREFIX}/"                           >> "${LOG_FILE}"
+
+   if [ "${result}" -eq 0 ]; then
+      log_info "Call ended (${reason:-hung up})."
+      return 0
+   fi
+
+   if [ -z "${reason}" ]; then
+      log_error "pjsua terminated unexpectedly. Last output:"
+      tail -n 5 "${out}" | while read -r line; do log_error "  ${line}"; done
+      return 2
+   fi
+
+   case "${code}" in
+      # Configuration / address errors: redialing would not help
+      400|401|403|404|405|407|410|413|414|416|420|484|485|488)
+         log_error "Call failed: ${reason}"
+         return 2
+         ;;
+      # Busy / declined
+      486|600|603)
+         if [ "${redial_on_busy}" != "true" ]; then
+            log_warn "Call rejected: ${reason}. Not redialing (redial_on_busy is off)."
+            return 2
+         fi
+         ;;
+   esac
+
+   log_warn "Call not answered: ${reason}"
+   return 1
+}
+
+handle_message() {
+   local msg="$1"
+   local call_dir="${CALLS_DIR}/${CALL_ID}"
+   local call_sip_uri message_tts audio_file_url tts_engine tts_language source wav
+   local call_duration ring_timeout retry_timeout retry_delay message_repeat redial_on_busy
+   local talk_time audio_length deadline now attempt rc
+
+   mkdir -p "${call_dir}"
+   # shellcheck disable=SC2064
+   trap "rm -rf '${call_dir}'" EXIT
+
+   call_sip_uri=$(msg_value "${msg}" call_sip_uri)
+   if [ -z "${call_sip_uri}" ]; then
+      log_error "call_sip_uri not specified. Cannot make call."
+      return 1
+   fi
+   # Allow plain numbers / user@host: complete them to a SIP URI
+   if [[ "${call_sip_uri}" != sip:* && "${call_sip_uri}" != sips:* ]]; then
+      if [[ "${call_sip_uri}" == *@* ]]; then
+         call_sip_uri="sip:${call_sip_uri}"
+      else
+         call_sip_uri="sip:${call_sip_uri}@${CALLER_DOMAIN}"
+      fi
+   fi
+
+   message_tts=$(msg_value "${msg}" message_tts)
+   audio_file_url=$(msg_value "${msg}" audio_file_url)
+
+   if [ -n "${message_tts}" ]; then
+      tts_engine=$(msg_value "${msg}" tts_engine)
+      tts_language=$(msg_value "${msg}" tts_language)
+      log_info "Generating TTS message..."
+      source=$(fetch_tts "${message_tts}" "${tts_engine:-${TTS_ENGINE}}" "${tts_language:-${TTS_LANGUAGE}}" "${call_dir}/source") \
+         || return 1
+   elif [ -n "${audio_file_url}" ]; then
+      if [[ "${audio_file_url}" == /* ]]; then
+         if [ ! -f "${audio_file_url}" ]; then
+            log_error "Audio file '${audio_file_url}' not found."
+            return 1
+         fi
+         source=${audio_file_url}
+      else
+         log_info "Downloading audio file '${audio_file_url}'..."
+         source=$(download_audio "${audio_file_url}" "${call_dir}/source") || return 1
+      fi
+   else
+      log_error "Neither message_tts nor audio_file_url specified. Cannot make call."
+      return 1
+   fi
+
+   wav="${call_dir}/message.wav"
+   # shellcheck disable=SC2086
+   if ! sox -V2 ${SOX_CUSTOM_OPTIONS_INPUT_FILE} "${source}" \
+         -r 16000 -c 1 -b 16 -e signed-integer ${SOX_CUSTOM_OPTIONS_OUTPUT_FILE} \
+         "${wav}" pad 0.5 1.5 2> "${call_dir}/sox.log"; then
+      sed "s/^/${LOG_PREFIX}/" "${call_dir}/sox.log"       >> "${SOX_LOG_FILE}"
+      log_error "Cannot convert audio to .wav: $(tail -n 1 "${call_dir}/sox.log")"
+      return 1
+   fi
+   sed "s/^/${LOG_PREFIX}/" "${call_dir}/sox.log"          >> "${SOX_LOG_FILE}"
+
+   audio_length=$(sox --info -D "${wav}" | awk '{ s = int($1); if ($1 > s) s++; if (s < 1) s = 1; print s }')
+
+   # Per-call pjsua config: own RTP port range and own audio file
+   {
+      echo "--rtp-port $((4100 + (CALL_ID % 100) * 20))"
+      cat "${BASE_CONF}"
+      echo "--auto-play"
+      conf_opt play-file "${wav}"
+   } > "${call_dir}/pjsua.conf"
+
+   call_duration=$(msg_value "${msg}" call_duration)
+
+   if [ "${call_duration}" == "-1" ] || { is_uint "${call_duration}" && [ "${call_duration}" -gt 0 ]; }; then
+      # Classic mode: one call that is terminated after call_duration seconds
+      # (counted from dialing), or earlier if the other side hangs up.
+      [ "${call_duration}" == "-1" ] && call_duration=${audio_length}
+      log_info "Calling '${call_sip_uri}', the call will be terminated after ${call_duration}s."
+      now=$(date +%s)
+      dial_once "${call_dir}" "${call_sip_uri}" 0 0 0 $((now + call_duration)) false
+      return 0
+   fi
+
+   # Redial mode: ring for ring_timeout seconds, hang up, call again until
+   # someone answers or retry_timeout is reached.
+   ring_timeout=$(msg_value "${msg}" ring_timeout)
+   is_uint "${ring_timeout}" || ring_timeout=${RING_TIMEOUT}
+   retry_timeout=$(msg_value "${msg}" retry_timeout)
+   is_uint "${retry_timeout}" || retry_timeout=${RETRY_TIMEOUT}
+   retry_delay=$(msg_value "${msg}" retry_delay)
+   is_uint "${retry_delay}" || retry_delay=${RETRY_DELAY}
+   message_repeat=$(msg_value "${msg}" message_repeat)
+   { is_uint "${message_repeat}" && [ "${message_repeat}" -gt 0 ]; } || message_repeat=${MESSAGE_REPEAT}
+   redial_on_busy=$(msg_value "${msg}" redial_on_busy)
+   is_bool "${redial_on_busy}" || redial_on_busy=${REDIAL_ON_BUSY}
+
+   # pjsua loops the audio file, so the message is repeated as long as the
+   # call is up after answering.
+   if [ "${MAX_CALL_TIME}" -gt 0 ]; then
+      talk_time=${MAX_CALL_TIME}
+   else
+      talk_time=$((audio_length * message_repeat + 1))
+   fi
+
+   log_info "Calling '${call_sip_uri}' (ring ${ring_timeout}s, redial for up to ${retry_timeout}s, message ${message_repeat}x = ${talk_time}s)."
+
+   deadline=$(( $(date +%s) + retry_timeout ))
+   attempt=1
+   while :; do
+      log_info "Attempt #${attempt}..."
+      if [ "${retry_timeout}" -gt 0 ]; then
+         dial_once "${call_dir}" "${call_sip_uri}" "${ring_timeout}" "${talk_time}" "${deadline}" 0 "${redial_on_busy}"
+      else
+         dial_once "${call_dir}" "${call_sip_uri}" "${ring_timeout}" "${talk_time}" 0 0 "${redial_on_busy}"
+      fi
+      rc=$?
+      [ "${rc}" -ne 1 ] && break
+
+      now=$(date +%s)
+      if [ $((now + retry_delay)) -ge "${deadline}" ]; then
+         log_warn "Nobody answered within ${retry_timeout}s. Giving up."
+         break
+      fi
+      sleep "${retry_delay}"
+      attempt=$((attempt + 1))
+   done
+}
+
+# Registered SIP client that answers incoming calls with a test message.
+# Restarted automatically if it stops.
+run_autoanswer() {
+   local fifo="${DATA_DIR}/dss_autoanswer.ctl"
+   rm -f "${fifo}" && mkfifo "${fifo}"
+   exec 4<> "${fifo}"
+
+   while true; do
+      pjsua --app-log-level=0 --log-level=3 --log-file "${AUTOANSWER_LOG}" \
+         --config-file "${AUTOANSWER_CONF}" <&4 > /dev/null 2>&1 &
+      local pid=$!
+
+      sleep 15
+      if grep -qi "registration success" "${AUTOANSWER_LOG}"; then
+         bashio::log.info "SIP client registered. Call <${CALLER_ID_URI}> to check system status."
+      else
+         bashio::log.warning "SIP client registration not confirmed yet. See ${AUTOANSWER_LOG}"
+      fi
+
+      wait "${pid}"
+      bashio::log.warning "Auto-answer SIP client stopped (exit code $?), restarting in 10s..."
+      sleep 10
+   done
+}
+
+# ------------------------------------------------------------------------------
+# Startup
+# ------------------------------------------------------------------------------
+
+bashio::log.info "Starting add-on..."
+
+mkdir -p "${DATA_DIR}"
+rm -rf "${DATA_DIR}"/dss_* "${CALLS_DIR}"
+mkdir -p "${CALLS_DIR}"
+chmod 770 "${DATA_DIR}"
+
+bashio::config.require 'sip_parameters.caller_id_uri'
+
+CALLER_ID_URI=$(bashio::config 'sip_parameters.caller_id_uri')
+REALM=$(config_value 'sip_parameters.realm' '*')
+SIP_USERNAME=$(config_value 'sip_parameters.username' '')
+SIP_PASSWORD=$(config_value 'sip_parameters.password' '')
+CALLER_DOMAIN=${CALLER_ID_URI#*@}
+CALLER_DOMAIN=${CALLER_DOMAIN%%[;>]*}
+
+if [ "${CALLER_ID_URI}" == "sip:username@sipserver.com" ] \
+   || { [ "${SIP_USERNAME}" == "username" ] && [ "${SIP_PASSWORD}" == "password" ]; }; then
+   bashio::exit.nok "Invalid config: replace the example SIP parameters with your own!"
+fi
+
+PJSUA_CUSTOM_OPTIONS=$(config_value 'pjsua_custom_options' '')
+SOX_CUSTOM_OPTIONS_INPUT_FILE=$(config_value 'sox_custom_options_input_file' '')
+SOX_CUSTOM_OPTIONS_OUTPUT_FILE=$(config_value 'sox_custom_options_output_file' '')
+TTS_ENGINE=$(config_value 'platform_tts' '')
+TTS_LANGUAGE=$(config_value 'tts_language' '')
+MAX_CALL_TIME=$(config_value 'max_call_time' '-1')
+RING_TIMEOUT=$(config_value 'ring_timeout' '20')
+RETRY_TIMEOUT=$(config_value 'retry_timeout' '120')
+RETRY_DELAY=$(config_value 'retry_delay' '3')
+MESSAGE_REPEAT=$(config_value 'message_repeat' '3')
+REDIAL_ON_BUSY=$(config_value 'redial_on_busy' 'true')
+
+[ "${MAX_CALL_TIME}" -gt 0 ] && [ "${MAX_CALL_TIME}" -lt 5 ] && MAX_CALL_TIME=5
+
+[ -n "${PJSUA_CUSTOM_OPTIONS}" ] && bashio::log.info "pjsua custom options: ${PJSUA_CUSTOM_OPTIONS}"
+bashio::log.info "TTS engine: ${TTS_ENGINE:-auto}, ring ${RING_TIMEOUT}s, redial for ${RETRY_TIMEOUT}s, message ${MESSAGE_REPEAT}x"
+
+sip_account_opts > "${BASE_CONF}"
+
+if bashio::config.has_value 'sip_parameters.sip_server_uri'; then
+   {
+      conf_opt registrar "$(bashio::config 'sip_parameters.sip_server_uri')"
+      sip_account_opts
+      echo "--auto-answer 200"
+      echo "--auto-play"
+      echo "--play-file /etc/dss_autoanswer.wav"
+      echo "--auto-loop"
+      echo "--duration 30"
+      echo "--max-calls 5"
+   } > "${AUTOANSWER_CONF}"
+
+   bashio::log.info "Registering as SIP client..."
+   run_autoanswer < /dev/null &
+fi
+
+chmod 660 "${DATA_DIR}"/dss_*
+
+# ------------------------------------------------------------------------------
+# Listen for messages
+# ------------------------------------------------------------------------------
+
+bashio::log.info "Listening for messages via hassio.addon_stdin..."
+
+while read -r msg; do
+   [ -z "${msg}" ] && continue
+
+   CALL_ID=$((CALL_ID + 1))
+
+   # "input" can arrive as JSON object or as JSON-encoded string
+   if ! msg=$(jq --compact-output 'if type == "string" then fromjson else . end | select(type == "object")' <<<"${msg}" 2> /dev/null) \
+      || [ -z "${msg}" ]; then
+      LOG_PREFIX="[Call ${CALL_ID}] " log_error "Invalid message, expected a JSON object."
+      continue
+   fi
+
+   LOG_PREFIX="[Call ${CALL_ID}] "
+   log_info "Received message ${msg}"
+   handle_message "${msg}" < /dev/null &
+   LOG_PREFIX=""
+done
+
+bashio::log.warning "stdin closed, waiting for running calls..."
+wait

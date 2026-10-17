@@ -1,0 +1,41 @@
+---
+configuration:
+  sip_parameters:
+    name: SIP parameters
+    description: >-
+      caller_id_uri (required, e.g. sip:username@sipserver.com), username,
+      password, realm (default *) and optionally sip_server_uri to register
+      a client that answers incoming calls with a test message.
+  ring_timeout:
+    name: Ring timeout
+    description: Seconds to ring before hanging up and redialing. Default 20 (about 4 rings).
+  retry_timeout:
+    name: Retry timeout
+    description: Stop redialing after this many seconds if nobody answers. 0 = dial only once. Default 120.
+  retry_delay:
+    name: Retry delay
+    description: Pause in seconds between two attempts. Default 3.
+  message_repeat:
+    name: Message repeat
+    description: How often the message is played after the call has been answered. Default 3.
+  redial_on_busy:
+    name: Redial on busy
+    description: Also redial when the line is busy or the call is declined. Default on.
+  max_call_time:
+    name: Max call time
+    description: Fixed time in seconds an answered call stays up (overrides message repeat). -1 or empty = depends on message repeat.
+  platform_tts:
+    name: TTS engine
+    description: TTS entity (e.g. tts.google_translate_en_com) or legacy platform. Empty = first TTS entity found.
+  tts_language:
+    name: TTS language
+    description: Optional language code for TTS, e.g. de or en.
+  pjsua_custom_options:
+    name: pjsua custom options
+    description: Additional command line options for pjsua.
+  sox_custom_options_input_file:
+    name: SoX input options
+    description: Additional SoX options for the input file.
+  sox_custom_options_output_file:
+    name: SoX output options
+    description: Additional SoX options for the output file.

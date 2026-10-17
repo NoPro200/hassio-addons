@@ -1,0 +1,42 @@
+---
+configuration:
+  sip_parameters:
+    name: SIP-Parameter
+    description: >-
+      caller_id_uri (Pflicht, z. B. sip:benutzer@sipserver.de), username,
+      password, realm (Standard *) und optional sip_server_uri, um einen
+      Client zu registrieren, der eingehende Anrufe mit einer Testansage
+      beantwortet.
+  ring_timeout:
+    name: Klingeldauer
+    description: Sekunden, die es klingelt, bevor aufgelegt und neu gewählt wird. Standard 20 (ca. 4-mal klingeln).
+  retry_timeout:
+    name: Wahlwiederholung bis
+    description: Nach so vielen Sekunden ohne Annahme wird aufgegeben. 0 = nur einmal anrufen. Standard 120.
+  retry_delay:
+    name: Pause zwischen Versuchen
+    description: Pause in Sekunden zwischen zwei Anrufversuchen. Standard 3.
+  message_repeat:
+    name: Ansage wiederholen
+    description: Wie oft die Ansage nach dem Abnehmen abgespielt wird. Standard 3.
+  redial_on_busy:
+    name: Bei besetzt neu wählen
+    description: Auch neu wählen, wenn besetzt ist oder der Anruf abgelehnt wird. Standard an.
+  max_call_time:
+    name: Feste Gesprächsdauer
+    description: Feste Zeit in Sekunden, die ein angenommener Anruf offen bleibt (statt Ansage-Wiederholung). -1 oder leer = nach Ansage-Wiederholung.
+  platform_tts:
+    name: TTS-Engine
+    description: TTS-Entität (z. B. tts.google_translate_de_de) oder alte Plattform. Leer = erste gefundene TTS-Entität.
+  tts_language:
+    name: TTS-Sprache
+    description: Optionaler Sprachcode für TTS, z. B. de oder en.
+  pjsua_custom_options:
+    name: Eigene pjsua-Optionen
+    description: Zusätzliche Kommandozeilen-Optionen für pjsua.
+  sox_custom_options_input_file:
+    name: SoX-Optionen Eingabe
+    description: Zusätzliche SoX-Optionen für die Eingabedatei.
+  sox_custom_options_output_file:
+    name: SoX-Optionen Ausgabe
+    description: Zusätzliche SoX-Optionen für die Ausgabedatei.
