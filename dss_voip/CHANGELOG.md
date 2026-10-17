@@ -1,6 +1,7 @@
 # Changelog
 ## 5.0.0
 ⚠️ Breaking: only `aarch64` and `amd64` are supported (like Home Assistant and the base image)
+⚠️ Breaking: renamed to "NoPro200 - DSS VoIP Notifier" with slug `nopro200_dss_voip` and data folder `/share/nopro200_dss_voip`, so it can be installed next to the original add-on
 ⚠️ Breaking: `call_duration` now means a single call without redial. Leave it out to get the new redial behaviour
 ⬆️ Upgrades add-on base image to v21.0.7 (Alpine 3.24, s6-overlay v3), pjsua 2.17
 ⬆️ `config.json`/`build.json` replaced by `config.yaml`/`build.yaml`, option translations (en/de)

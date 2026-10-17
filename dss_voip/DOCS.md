@@ -1,4 +1,4 @@
-# DSS VoIP Notifier
+# NoPro200 - DSS VoIP Notifier
 
 Make VoIP calls from Home Assistant: a text is turned into speech by any
 Home Assistant TTS integration (or an audio file is used), a SIP number is
@@ -17,7 +17,7 @@ Features:
 
 1. Add the repository `https://github.com/NoPro200/hassio-addons` to your
    add-on store.
-1. Install the "DSS VoIP Notifier" add-on.
+1. Install the "NoPro200 - DSS VoIP Notifier" add-on.
 1. Configure at least `caller_id_uri`, `username` and `password`.
 1. Set up a TTS integration in Home Assistant (e.g. Google Translate, Piper).
 1. Start the add-on and check its log.
@@ -45,7 +45,7 @@ message_repeat: 3
 | `username`       | Authentication user ID, if required by your SIP server. |
 | `password`       | Authentication password, if required by your SIP server. |
 | `realm`          | Authentication realm. Default `*` (answer to any realm). |
-| `sip_server_uri` | (Optional) Registrar URL, e.g. `sip:sipserver.com`. If set, the add-on registers a SIP client that answers incoming calls with a test message, so you can check the system status. Log: `/share/dss_voip/dss_autoanswer.log`. |
+| `sip_server_uri` | (Optional) Registrar URL, e.g. `sip:sipserver.com`. If set, the add-on registers a SIP client that answers incoming calls with a test message, so you can check the system status. Log: `/share/nopro200_dss_voip/dss_autoanswer.log`. |
 
 ### Option `ring_timeout`
 
@@ -107,13 +107,13 @@ Call the add-on from an automation or script:
 ```yaml
 action: hassio.addon_stdin
 data:
-  addon: xxxxxxxx_dss_voip
+  addon: xxxxxxxx_nopro200_dss_voip
   input:
     call_sip_uri: sip:+491701234567@sipserver.com
     message_tts: The alarm has been triggered!
 ```
 
-Replace `xxxxxxxx_dss_voip` with the slug shown in the URL of the add-on
+Replace `xxxxxxxx_nopro200_dss_voip` with the slug shown in the URL of the add-on
 page in Home Assistant (it depends on the repository).
 
 ### Call parameters
@@ -137,7 +137,7 @@ Example with all options:
 ```yaml
 action: hassio.addon_stdin
 data:
-  addon: xxxxxxxx_dss_voip
+  addon: xxxxxxxx_nopro200_dss_voip
   input:
     call_sip_uri: "**610"
     message_tts: Somebody is at the door.
@@ -256,9 +256,9 @@ pjsua_custom_options: --no-tcp --outbound=sip:sip.netelip.com:9060;lr
 ## Logs
 
 - Add-on log: overview of every call (`[Call N]` prefix).
-- `/share/dss_voip/dss_pjsua.log`: detailed SIP log of all calls.
-- `/share/dss_voip/dss_sox.log`: audio conversion log.
-- `/share/dss_voip/dss_autoanswer.log`: log of the registered SIP client.
+- `/share/nopro200_dss_voip/dss_pjsua.log`: detailed SIP log of all calls.
+- `/share/nopro200_dss_voip/dss_sox.log`: audio conversion log.
+- `/share/nopro200_dss_voip/dss_autoanswer.log`: log of the registered SIP client.
 
 ## License
 

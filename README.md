@@ -14,10 +14,10 @@ https://github.com/NoPro200/hassio-addons
 
 | Add-on | Description |
 | ------ | ----------- |
-| [DSS VoIP Notifier](dss_voip) | Make VoIP calls from Home Assistant and play a TTS message to whoever answers. Redials until someone picks up, repeats the message, supports parallel calls. |
+| [NoPro200 - DSS VoIP Notifier](dss_voip) | Make VoIP calls from Home Assistant and play a TTS message to whoever answers. Redials until someone picks up, repeats the message, supports parallel calls. |
 
 > [!NOTE]
-> **DSS VoIP Notifier** is a fork and further development of the original
+> **NoPro200 - DSS VoIP Notifier** is a fork and further development of the original
 > [DSS VoIP Notifier][original] by [SDeSalve][sdesalve]. It was reworked
 > with the help of AI ([Claude Code][claude-code]). See the
 > [add-on README](dss_voip/README.md) for what changed.

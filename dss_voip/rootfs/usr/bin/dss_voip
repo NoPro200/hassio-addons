@@ -1,14 +1,14 @@
 #!/command/with-contenv bashio
 # shellcheck shell=bash
 # ==============================================================================
-# DSS VoIP Notifier for Home Assistant
+# NoPro200 - DSS VoIP Notifier for Home Assistant
 # Make VoIP calls from Home Assistant
 #
 # Every message received on stdin is handled in its own background job with
 # its own pjsua instance, so several calls can run at the same time.
 # ==============================================================================
 
-readonly DATA_DIR=/share/dss_voip
+readonly DATA_DIR=/share/nopro200_dss_voip
 readonly CALLS_DIR="${DATA_DIR}/calls"
 readonly LOG_FILE="${DATA_DIR}/dss_pjsua.log"
 readonly SOX_LOG_FILE="${DATA_DIR}/dss_sox.log"

@@ -1,4 +1,4 @@
-# Home Assistant Add-on: DSS VoIP Notifier
+# Home Assistant Add-on: NoPro200 - DSS VoIP Notifier
 
 ![Version][version-shield] ![Supports aarch64 Architecture][aarch64-shield] ![Supports amd64 Architecture][amd64-shield] ![License][license-shield]
 
@@ -37,7 +37,7 @@ notification that must not be missed.
 ## Quick start
 
 1. Add the repository `https://github.com/NoPro200/hassio-addons` to the
-   add-on store and install **DSS VoIP Notifier**.
+   add-on store and install **NoPro200 - DSS VoIP Notifier**.
 1. Configure your SIP account:
 
    ```yaml
@@ -53,13 +53,13 @@ notification that must not be missed.
    ```yaml
    action: hassio.addon_stdin
    data:
-     addon: xxxxxxxx_dss_voip
+     addon: xxxxxxxx_nopro200_dss_voip
      input:
        call_sip_uri: "+491701234567"
        message_tts: The alarm has been triggered!
    ```
 
-   Replace `xxxxxxxx_dss_voip` with the slug shown in the URL of the add-on
+   Replace `xxxxxxxx_nopro200_dss_voip` with the slug shown in the URL of the add-on
    page.
 
 ## How a call works
@@ -110,18 +110,26 @@ sipgate, Messagenet and more: **[DOCS.md](DOCS.md)**
 | TTS | Legacy API, `google_translate` only by default | Current API, any TTS entity |
 | Base image | v11 (2022), s6-overlay v2 | v21, s6-overlay v3 |
 | Architectures | aarch64, amd64, armhf, armv7, i386 | aarch64, amd64 |
+| Slug / data folder | `dss_voip`, `/share/dss_voip` | `nopro200_dss_voip`, `/share/nopro200_dss_voip` |
 
 Existing automations keep working: all old call parameters are still
 supported. Only the meaning of `call_duration` changed slightly (it now
 disables redial), and the add-on slug is different because it comes from
 another repository.
 
+## Installing next to the original
+
+This add-on can be installed **at the same time** as the original
+DSS VoIP Notifier: it uses its own slug (`nopro200_dss_voip`), its own data
+folder (`/share/nopro200_dss_voip`) and random local SIP ports, so the two
+add-ons do not interfere with each other. Handy for testing before switching.
+
 ## Logs & troubleshooting
 
 - The add-on log shows every call with a `[Call N]` prefix.
-- Detailed SIP log: `/share/dss_voip/dss_pjsua.log`
-- Audio conversion log: `/share/dss_voip/dss_sox.log`
-- Self-test client log: `/share/dss_voip/dss_autoanswer.log`
+- Detailed SIP log: `/share/nopro200_dss_voip/dss_pjsua.log`
+- Audio conversion log: `/share/nopro200_dss_voip/dss_sox.log`
+- Self-test client log: `/share/nopro200_dss_voip/dss_autoanswer.log`
 
 Common problems:
 
