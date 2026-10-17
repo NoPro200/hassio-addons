@@ -262,7 +262,8 @@ pjsua_custom_options: --no-tcp --outbound=sip:sip.netelip.com:9060;lr
 
 ## License
 
-Based on [DSS VoIP Notifier][original] by [SDeSalve][sdesalve].
+Fork and further development of the original [DSS VoIP Notifier][original]
+by [SDeSalve][sdesalve], reworked with the help of AI (Claude Code).
 Licensed under [CC BY-NC 4.0](LICENSE.md).
 
 [pjsuaman]: https://docs.pjsip.org/en/latest/specific-guides/other/cli_cmd.html
