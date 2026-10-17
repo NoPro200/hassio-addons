@@ -148,7 +148,7 @@ Common problems:
 Licensed under [CC BY-NC 4.0](LICENSE.md), like the original – free for
 non-commercial use with attribution.
 
-[version-shield]: https://img.shields.io/badge/version-5.0.0-blue.svg
+[version-shield]: https://img.shields.io/badge/version-5.0.1-blue.svg
 [aarch64-shield]: https://img.shields.io/badge/aarch64-yes-green.svg
 [amd64-shield]: https://img.shields.io/badge/amd64-yes-green.svg
 [license-shield]: https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey.svg

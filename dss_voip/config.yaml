@@ -1,6 +1,6 @@
 ---
 name: NoPro200 - DSS VoIP Notifier
-version: 5.0.0
+version: 5.0.1
 slug: nopro200_dss_voip
 description: VoIP Notifier for Home Assistant
 url: https://github.com/NoPro200/hassio-addons/tree/main/dss_voip

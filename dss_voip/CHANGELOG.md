@@ -1,4 +1,10 @@
 # Changelog
+## 5.0.1
+🐛 After the first unanswered attempt the call job ended silently instead of redialing (bashio's strict mode stopped the script on an expected error)
+🐛 Ringing / hang-up were not detected while pjsua was running because pjsua buffers its output, so calls were only ended by the fallback timer (ring_timeout + 10 s)
+🐛 The registration check of the auto-answer client could not see the registration for the same reason
+
+
 ## 5.0.0
 ⚠️ Breaking: only `aarch64` and `amd64` are supported (like Home Assistant and the base image)
 ⚠️ Breaking: renamed to "NoPro200 - DSS VoIP Notifier" with slug `nopro200_dss_voip` and data folder `/share/nopro200_dss_voip`, so it can be installed next to the original add-on

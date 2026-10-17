@@ -7,6 +7,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Setup base
 RUN apk add --no-cache \
+        coreutils=9.11-r0 \
         pjsua=2.17-r0 \
         sox=14.4.2-r14
 

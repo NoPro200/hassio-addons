@@ -8,6 +8,11 @@
 # its own pjsua instance, so several calls can run at the same time.
 # ==============================================================================
 
+# bashio enables errexit/nounset/pipefail. This script checks all results
+# itself, and an expected failure (e.g. kill on a pjsua that already quit)
+# must not silently end a running call.
+set +o errexit +o errtrace +o nounset +o pipefail
+
 readonly DATA_DIR=/share/nopro200_dss_voip
 readonly CALLS_DIR="${DATA_DIR}/calls"
 readonly LOG_FILE="${DATA_DIR}/dss_pjsua.log"
@@ -199,7 +204,9 @@ dial_once() {
    # pjsua reads its console commands (h = hangup, q = quit) from the fifo.
    # Opening it read-write never blocks and never delivers EOF.
    exec 3<> "${fifo}"
-   pjsua --app-log-level=3 --config-file "${dir}/pjsua.conf" "${uri}" <&3 > "${out}" 2>&1 &
+   # stdbuf: pjsua does not flush stdout, without it the call states would
+   # only show up in the file after pjsua has quit.
+   stdbuf -oL -eL pjsua --app-log-level=3 --config-file "${dir}/pjsua.conf" "${uri}" <&3 > "${out}" 2>&1 &
    pid=$!
 
    start=$(date +%s)
@@ -442,8 +449,8 @@ run_autoanswer() {
    exec 4<> "${fifo}"
 
    while true; do
-      pjsua --app-log-level=0 --log-level=3 --log-file "${AUTOANSWER_LOG}" \
-         --config-file "${AUTOANSWER_CONF}" <&4 > /dev/null 2>&1 &
+      stdbuf -oL -eL pjsua --app-log-level=3 --log-level=3 \
+         --config-file "${AUTOANSWER_CONF}" <&4 > "${AUTOANSWER_LOG}" 2>&1 &
       local pid=$!
 
       sleep 15
